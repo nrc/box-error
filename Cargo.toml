@@ -1,0 +1,11 @@
+[package]
+name = "box-error"
+version = "0.0.1"
+authors = ["Nick Cameron <nrc@ncameron.org>"]
+edition = "2018"
+description = "A library for error handling using boxed errors (place-holder)"
+license = "Apache-2.0"
+repository = "https://github.com/nrc/box-error/"
+
+[dev-dependencies]
+thiserror = "1.0"
