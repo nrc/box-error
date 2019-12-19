@@ -161,7 +161,26 @@ impl<T> DynResult<T> {
             Err(_) => panic!(),
         }
     }
+
+    // For a `bail!`-like macro
+    pub fn from_display<M>(message: M) -> DynResult<T>
+    where
+        M: fmt::Display + fmt::Debug + Send + Sync + 'static,
+    {
+        BoxResult(Err(Box::new(StringError(message.to_string()))))
+    }
 }
+
+#[derive(Clone, Debug)]
+struct StringError(String);
+
+impl fmt::Display for StringError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Error for StringError {}
 
 /// Indicates an error type can be downcasted infallibly.
 pub trait Downcast: Sized {
