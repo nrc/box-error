@@ -25,6 +25,13 @@ impl<T, E: ?Sized> BoxResult<T, E> {
             Err(e) => Err(e),
         }
     }
+
+    pub fn into_err<E2>(self) -> BoxResult<T, E2>
+    where
+        Box<E>: Into<Box<E2>>,
+    {
+        self.map_err(Into::into)
+    }
 }
 
 impl<T, E: ?Sized> BoxResult<T, E> {
@@ -149,7 +156,10 @@ impl<T> DynResult<T> {
 
     /// Downcast, panics if the concrete type is not `E`.
     pub fn expect<E>(self) -> BoxResult<T, E> {
-        unimplemented!();
+        match self.try_cast() {
+            Ok(r) => r,
+            Err(_) => panic!(),
+        }
     }
 }
 
