@@ -14,6 +14,10 @@ impl<T, E: ?Sized> BoxResult<T, E> {
         BoxResult(Ok(v))
     }
 
+    pub fn from_boxed_err(e: Box<E>) -> BoxResult<T, E> {
+        BoxResult(Err(e))
+    }
+
     pub fn as_ref(&self) -> &Result<T, &E> {
         unsafe { mem::transmute(&self.0) }
     }
@@ -111,16 +115,19 @@ impl<T, E: ?Sized> From<Result<T, Box<E>>> for BoxResult<T, E> {
     }
 }
 
-impl<T, E: ?Sized> Try for BoxResult<T, E> {
+impl<T, E> Try for BoxResult<T, E> {
     type Ok = T;
-    type Error = Box<E>;
+    type Error = E;
 
-    fn into_result(self) -> Result<T, Box<E>> {
-        self.0
+    fn into_result(self) -> Result<T, E> {
+        match self.0 {
+            Ok(v) => Ok(v),
+            Err(e) => Err(*e),
+        }
     }
 
-    fn from_error(v: Box<E>) -> Self {
-        BoxResult(Err(v))
+    fn from_error(v: E) -> Self {
+        BoxResult(Err(Box::new(v)))
     }
 
     fn from_ok(v: T) -> Self {
@@ -128,26 +135,75 @@ impl<T, E: ?Sized> Try for BoxResult<T, E> {
     }
 }
 
-pub type DynResult<T> = BoxResult<T, dyn Error>;
-pub type DynError = Box<dyn Error>;
+#[derive(Debug)]
+pub struct AnyResult<T>(Result<T, AnyError>);
+#[derive(Debug)]
+pub struct AnyError(anyhow::Error);
 
-impl<T, E: Error + 'static> From<BoxResult<T, E>> for DynResult<T> {
-    fn from(r: BoxResult<T, E>) -> DynResult<T> {
+impl<T> Try for AnyResult<T> {
+    type Ok = T;
+    type Error = AnyError;
+
+    fn into_result(self) -> Result<T, AnyError> {
+        self.0
+    }
+
+    fn from_error(e: AnyError) -> Self {
+        AnyResult(Err(e))
+    }
+
+    fn from_ok(v: T) -> Self {
+        AnyResult(Ok(v))
+    }
+}
+
+impl<T, E: Error + Send + Sync + 'static> From<BoxResult<T, E>> for AnyResult<T> {
+    fn from(r: BoxResult<T, E>) -> AnyResult<T> {
         match r.0 {
-            Ok(v) => BoxResult(Ok(v)),
-            Err(v) => BoxResult(Err(v)),
+            Ok(v) => AnyResult(Ok(v)),
+            Err(v) => AnyResult(Err(AnyError(v.into()))),
         }
     }
 }
 
-// TODO implement downcasting
-impl<T> DynResult<T> {
-    /// Try to downcast to a concrete error type `E`.
-    pub fn try_cast<E>(self) -> Result<BoxResult<T, E>, DynResult<T>> {
-        unimplemented!();
+pub trait Downcast: Sized + Send + Sync + 'static + fmt::Debug + fmt::Display {
+    fn other(r: AnyError) -> Self;
+
+    fn cast(r: AnyError) -> Self {
+        match r.0.downcast::<Self>() {
+            Ok(e) => e,
+            Err(r) => Self::other(AnyError(r)),
+        }
+    }
+}
+
+impl<T> AnyResult<T> {
+    #[allow(non_snake_case)]
+    pub fn Ok(v: T) -> AnyResult<T> {
+        AnyResult(Ok(v))
     }
 
-    pub fn cast<E: Downcast + Error>(self) -> BoxResult<T, E> {
+    #[allow(non_snake_case)]
+    pub fn Err<E: Into<anyhow::Error>>(e: E) -> AnyResult<T> {
+        AnyResult(Err(AnyError(e.into())))
+    }
+
+    /// Try to downcast to a concrete error type `E`.
+    pub fn try_cast<E: Error + Send + Sync + 'static + fmt::Debug + fmt::Display>(
+        self,
+    ) -> Result<BoxResult<T, E>, AnyResult<T>> {
+        match self.0 {
+            Ok(v) => Ok(BoxResult::Ok(v)),
+            Err(AnyError(e)) => match e.downcast::<Box<E>>() {
+                Ok(v) => Ok(BoxResult::from_boxed_err(v)),
+                Err(r) => Err(AnyResult(Err(AnyError(r)))),
+            },
+        }
+    }
+
+    pub fn cast<E: Downcast + Error + Send + Sync + 'static + fmt::Debug + fmt::Display>(
+        self,
+    ) -> BoxResult<T, E> {
         match self.0 {
             Ok(v) => BoxResult(Ok(v)),
             Err(e) => BoxResult(Err(Box::new(E::cast(e)))),
@@ -155,39 +211,22 @@ impl<T> DynResult<T> {
     }
 
     /// Downcast, panics if the concrete type is not `E`.
-    pub fn expect<E>(self) -> BoxResult<T, E> {
+    pub fn expect<E: Error + Send + Sync + 'static + fmt::Debug + fmt::Display>(
+        self,
+    ) -> BoxResult<T, E> {
         match self.try_cast() {
             Ok(r) => r,
+            Err(AnyResult(Err(e))) => panic!("Found {:?}", e),
             Err(_) => panic!(),
         }
     }
 
     // For a `bail!`-like macro
-    pub fn from_display<M>(message: M) -> DynResult<T>
+    pub fn from_display<M>(message: M) -> AnyResult<T>
     where
         M: fmt::Display + fmt::Debug + Send + Sync + 'static,
     {
-        BoxResult(Err(Box::new(StringError(message.to_string()))))
-    }
-}
-
-#[derive(Clone, Debug)]
-struct StringError(String);
-
-impl fmt::Display for StringError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl Error for StringError {}
-
-/// Indicates an error type can be downcasted infallibly.
-pub trait Downcast: Sized {
-    fn other(r: Box<dyn Error>) -> Self;
-
-    fn cast(r: Box<dyn Error>) -> Self {
-        unimplemented!();
+        AnyResult(Err(AnyError(anyhow::Error::msg(message.to_string()))))
     }
 }
 
@@ -197,28 +236,34 @@ mod tests {
     use thiserror::Error;
 
     #[derive(Error, Debug)]
-    enum TestError {
+    pub enum TestError {
         #[error("foo")]
         Foo,
         #[error("bar: {0}")]
         Bar(String),
         #[error("other")]
-        Other(DynError),
+        Other(AnyError),
     }
 
     impl Downcast for TestError {
-        fn other(r: Box<dyn Error>) -> TestError {
+        fn other(r: AnyError) -> TestError {
             TestError::Other(r)
         }
     }
 
-    // Similar should be generated by #[from], which means we are not quite like thiserror (note we make Box)
-    impl From<String> for Box<TestError> {
-        fn from(s: String) -> Box<TestError> {
-            Box::new(TestError::Bar(s))
+    impl From<String> for TestError {
+        fn from(s: String) -> TestError {
+            TestError::Bar(s)
         }
     }
 
+    impl<T: Into<TestError>> From<T> for AnyError {
+        fn from(e: T) -> AnyError {
+            e.into().into()
+        }
+    }
+
+    // Match from concrete error.
     fn mtch(r: BoxResult<i32, TestError>) {
         match r.as_ref() {
             Ok(_) => {}
@@ -227,7 +272,8 @@ mod tests {
         }
     }
 
-    fn mtch_dyn(r: DynResult<i32>) {
+    // Match from dynamic error.
+    fn mtch_any(r: AnyResult<i32>) {
         match r.expect::<TestError>().as_ref() {
             Ok(_) => {}
             Err(TestError::Foo) => {}
@@ -235,15 +281,17 @@ mod tests {
         }
     }
 
-    // These examples show making it easy to convert from something like tipb error
+    // These examples show making it easy to convert from something like tipb error.
+    // To concrete error.
     fn bar(r: Result<i32, String>) -> BoxResult<i32, TestError> {
         let r = r?;
         BoxResult::Ok(r)
     }
 
-    fn bar_dyn(r: Result<i32, String>) -> DynResult<i32> {
+    // To dynamic error.
+    fn bar_any(r: Result<i32, String>) -> AnyResult<i32> {
         let r = r?;
-        BoxResult::Ok(r)
+        AnyResult::Ok(r)
     }
 
     #[test]
@@ -251,7 +299,7 @@ mod tests {
         let e = BoxResult::Err(TestError::Foo);
         mtch(e);
         let e = BoxResult::Err(TestError::Foo);
-        mtch_dyn(e.into());
+        mtch_any(e.into());
     }
 
     // TODO test combinator functions

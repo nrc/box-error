@@ -7,5 +7,8 @@ description = "A library for error handling using boxed errors (place-holder)"
 license = "Apache-2.0"
 repository = "https://github.com/nrc/box-error/"
 
+[dependencies]
+anyhow = "1.0"
+
 [dev-dependencies]
 thiserror = "1.0"
