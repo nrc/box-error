@@ -270,11 +270,22 @@ mod tests {
             Err(TestError::Foo) => {}
             _ => {}
         }
+        match r.as_ref2() {
+            Ok(_) => {}
+            Err(TestError::Foo) => {}
+            _ => {}
+        }
     }
 
     // Match from dynamic error.
     fn mtch_any(r: AnyResult<i32>) {
-        match r.expect::<TestError>().as_ref() {
+        let te = r.expect::<TestError>();
+        match te.as_ref() {
+            Ok(_) => {}
+            Err(TestError::Foo) => {}
+            _ => {}
+        }
+        match te.as_ref2() {
             Ok(_) => {}
             Err(TestError::Foo) => {}
             _ => {}
