@@ -166,6 +166,7 @@ impl<T, E: Error + Send + Sync + 'static> From<BoxResult<T, E>> for AnyResult<T>
     }
 }
 
+// TODO: Could we use `T: From<AnyError>` instead of having to implement `Downcast`?
 pub trait Downcast: Sized + Send + Sync + 'static + fmt::Debug + fmt::Display {
     fn other(r: AnyError) -> Self;
 
