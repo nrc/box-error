@@ -30,7 +30,7 @@ impl<T, E: ?Sized> BoxResult<T, E> {
         }
     }
 
-    pub fn into_err<E2>(self) -> BoxResult<T, E2>
+    pub fn err_into<E2>(self) -> BoxResult<T, E2>
     where
         Box<E>: Into<Box<E2>>,
     {
@@ -228,6 +228,33 @@ impl<T> AnyResult<T> {
         M: fmt::Display + fmt::Debug + Send + Sync + 'static,
     {
         AnyResult(Err(AnyError(anyhow::Error::msg(message.to_string()))))
+    }
+}
+
+impl<'a> From<&'a str> for AnyError {
+    fn from(r: &'a str) -> AnyError {
+        AnyError(anyhow::Error::msg(r.to_owned()))
+    }
+}
+
+impl Error for AnyError {
+    fn description(&self) -> &str {
+        self.0.description()
+    }
+
+    #[allow(deprecated)]
+    fn cause(&self) -> Option<&dyn Error> {
+        self.0.cause()
+    }
+
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.0.source()
+    }
+}
+
+impl fmt::Display for AnyError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 
